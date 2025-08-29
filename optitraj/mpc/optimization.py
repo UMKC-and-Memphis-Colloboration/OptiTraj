@@ -60,6 +60,7 @@ class OptimalControlProblem(ABC):
         self.dt: np.ndarray[float] = mpc_params.dt
         self.Q: np.ndarray[float] = mpc_params.Q
         self.R: np.ndarray[float] = mpc_params.R
+        
 
         # Initialize CasADi model
         self.casadi_model: CasadiModel = casadi_model
@@ -76,6 +77,8 @@ class OptimalControlProblem(ABC):
         validate_limits(self.ctrl_limits, limit_type="control")
 
         self.g: List[ca.SX] = []
+        p_length = self._parameter_length()
+        self.P = ca.MX.sym('P', p_length)
         self._init_decision_variables()
         self._check_correct_dimensions(self.X, self.U)
         self.define_bound_constraints()
@@ -100,10 +103,10 @@ class OptimalControlProblem(ABC):
         """
         self.X: ca.MX = ca.MX.sym('X', self.casadi_model.n_states, self.N+1)
         self.U: ca.MX = ca.MX.sym('U', self.casadi_model.n_controls, self.N)
-
+        p = self._parameter_length()
         # Initial and final state placeholders
         self.P = ca.MX.sym(
-            'P', self.casadi_model.n_states + self.casadi_model.n_states)
+            'P', p)
 
         # Decision variables for optimization
         self.OPT_variables = ca.vertcat(
@@ -146,6 +149,17 @@ class OptimalControlProblem(ABC):
             self.ubx['X'][i, :] = self.state_limits[state_name]['max']
 
     @abstractmethod
+    def _parameter_length(self) -> int:
+        """
+        Return how many entries go into the vector P.
+        By default it's 2 * n_states (initial + final). 
+        Users can override this method to include additional parameters.
+        For example, if the problem requires additional parameters like obstacle positions,
+        this method should be overridden to return the correct length.
+        """
+        return 2 * self.casadi_model.n_states
+
+    @abstractmethod
     def compute_total_cost(self) -> ca.MX:
         """
         Abstract method that must be implemented by the user to compute the total cost of the 
@@ -161,11 +175,15 @@ class OptimalControlProblem(ABC):
     #     """
     #     pass
 
-    def solve(self, x0: np.ndarray, xF: np.ndarray, u0: np.ndarray) -> np.ndarray:
+    def solve(self, x0: np.ndarray, xF: np.ndarray, u0: np.ndarray,
+              p: np.ndarray = None) -> np.ndarray:
         """
         Solve the optimal control problem for the given initial state and control
 
         """
+        if p is None:
+            p = np.concatenate([x0, xF])
+
         state_init = ca.DM(x0)
         state_final = ca.DM(xF)
 
@@ -185,6 +203,7 @@ class OptimalControlProblem(ABC):
             'lbx': self.pack_variables_fn(**self.lbx)['flat'],
             'ubx': self.pack_variables_fn(**self.ubx)['flat'],
         }
+        
         args['p'] = ca.vertcat(
             state_init,    # current state
             state_final   # target state
@@ -225,7 +244,7 @@ class OptimalControlProblem(ABC):
             self.g = ca.vertcat(self.g, self.X[:, k+1] - state_next_rk4)
 
     def init_solver(self, cost_fn: ca.MX, solver_opts: Dict = None,
-                    max_wall_time_sec: float = 2.0) -> None:
+                    max_wall_time_sec: float = 3.0) -> None:
         """Initialize the solver for the optimization problem using the defined cost function and constraints."""
         nlp_prob = {
             'f': cost_fn,
@@ -310,3 +329,5 @@ class OptimalControlProblem(ABC):
         """
         solution = self.solve(x0, xF, u0)
         return self.get_solution(solution)
+
+

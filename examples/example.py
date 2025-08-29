@@ -196,13 +196,13 @@ def main() -> None:
     def custom_stop_criteria(state: np.ndarray,
                              final_state: np.ndarray) -> bool:
         distance = np.linalg.norm(state[0:2] - final_state[0:2])
-        if distance < 5.0:
+        if distance < 0.01:
             return True
 
     # we can now begin our simulation
     closed_loop_sim: CloseLoopSim = CloseLoopSim(
         optimizer=plane_opt_control, x_init=x0, x_final=xF, u0=u_0,
-        N=100, log_data=True, stop_criteria=custom_stop_criteria)
+        N=300, log_data=True, stop_criteria=custom_stop_criteria)
 
     # we can now run the simulation
     closed_loop_sim.run()
