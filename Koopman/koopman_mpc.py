@@ -141,14 +141,8 @@ class KoopmanOptControl(OptimalControlProblem):
 
 
 if __name__ == "__main__":
-    # TODO: Xander check out this example
-    # Example usage
-    A = np.array([[1.0, 0.1], [0.0, 1.0]])  # 2 x 2 -> 2 rows = 2 states
-    # 2 x 1 -> 2 rows = 2 states, 1 column = 1 control input
-    B = np.array([[0.0], [0.1]])
-
     koopman_state_space, dt, model_name = load_koopman_json(
-        "matrix_example.json")
+        "Koopman/model_results.json")
     model = KoopManModel(koopman_state_space=koopman_state_space)
     print("A matrix:\n", model.A)
     print("B matrix:\n", model.B)
