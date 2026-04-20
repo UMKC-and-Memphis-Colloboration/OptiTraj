@@ -25,7 +25,7 @@ torch.manual_seed(123)
 np.random.seed(123)
 
 # Training flags
-Stable_A   = 1    # 1: stable-A parameterization, 0: unconstrained A
+Stable_A = 1    # 1: stable-A parameterization, 0: unconstrained A
 multi_step = 1    # selection metric: multi-step vs one-step
 
 # ============================================================
@@ -41,9 +41,9 @@ dt = float(np.median(np.diff(t)))
 print("N =", len(df), "dt~", dt)
 
 # ---- Attitude (deg -> rad) ----
-phi   = np.deg2rad(df["ATT_Roll"].to_numpy(dtype=float))
+phi = np.deg2rad(df["ATT_Roll"].to_numpy(dtype=float))
 theta = np.deg2rad(df["ATT_Pitch"].to_numpy(dtype=float))
-psi   = np.deg2rad(df["ATT_Yaw"].to_numpy(dtype=float))
+psi = np.deg2rad(df["ATT_Yaw"].to_numpy(dtype=float))
 
 sin_psi = np.sin(psi)
 cos_psi = np.cos(psi)
@@ -53,12 +53,13 @@ p = df["IMU_GyrX"].to_numpy(dtype=float)
 q = df["IMU_GyrY"].to_numpy(dtype=float)
 r = df["IMU_GyrZ"].to_numpy(dtype=float)
 
-x = np.vstack([phi, theta, sin_psi, cos_psi, p, q, r]).T.astype(np.float32)  # (N,7)
+x = np.vstack([phi, theta, sin_psi, cos_psi, p, q, r]
+              ).T.astype(np.float32)  # (N,7)
 
 # ---- Desired attitude (deg -> rad) ----
-phi_d   = np.deg2rad(df["ATT_DesRoll"].to_numpy(dtype=float))
+phi_d = np.deg2rad(df["ATT_DesRoll"].to_numpy(dtype=float))
 theta_d = np.deg2rad(df["ATT_DesPitch"].to_numpy(dtype=float))
-psi_d   = np.deg2rad(df["ATT_DesYaw"].to_numpy(dtype=float))
+psi_d = np.deg2rad(df["ATT_DesYaw"].to_numpy(dtype=float))
 
 sin_psi_d = np.sin(psi_d)
 cos_psi_d = np.cos(psi_d)
@@ -71,20 +72,21 @@ c1 = (df["RCOU_C1"].to_numpy(dtype=float) - 1500.0) / 500.0
 c2 = (df["RCOU_C2"].to_numpy(dtype=float) - 1500.0) / 500.0
 c4 = (df["RCOU_C4"].to_numpy(dtype=float) - 1500.0) / 500.0
 
-u = np.vstack([phi_d, theta_d, sin_psi_d, cos_psi_d, tho, c1, c2, c4]).T.astype(np.float32)  # (N,8)
+u = np.vstack([phi_d, theta_d, sin_psi_d, cos_psi_d, tho,
+              c1, c2, c4]).T.astype(np.float32)  # (N,8)
 
 # One-step pairs
 X = x[:-1, :]
-Y = x[1:,  :]
+Y = x[1:, :]
 U = u[:-1, :]
 
 print("Raw pairs:", X.shape, Y.shape, U.shape)
 
 # Normalization
 X_mean = X.mean(axis=0, keepdims=True)
-X_std  = X.std(axis=0, keepdims=True) + 1e-6
+X_std = X.std(axis=0, keepdims=True) + 1e-6
 U_mean = U.mean(axis=0, keepdims=True)
-U_std  = U.std(axis=0, keepdims=True) + 1e-6
+U_std = U.std(axis=0, keepdims=True) + 1e-6
 
 Xn = (X - X_mean) / X_std
 Yn = (Y - X_mean) / X_std
@@ -99,30 +101,35 @@ N = X_t.shape[0]
 split = int(0.8 * N)
 
 Xtrain, Ytrain, Utrain = X_t[:split], Y_t[:split], U_t[:split]
-Xtest,  Ytest,  Utest  = X_t[split:], Y_t[split:], U_t[split:]
+Xtest,  Ytest,  Utest = X_t[split:], Y_t[split:], U_t[split:]
 
 num_state = Xtrain.shape[1]  # 7
 num_input = Utrain.shape[1]  # 8
 
-print("Train:", Xtrain.shape, Utrain.shape, "| Test:", Xtest.shape, Utest.shape)
+print("Train:", Xtrain.shape, Utrain.shape,
+      "| Test:", Xtest.shape, Utest.shape)
 print("num_state =", num_state, "num_input =", num_input)
 
 # ============================================================
 # BLOCK 3 — Datasets & DataLoaders
 # ============================================================
 
+
 class PairDataset(Dataset):
     def __init__(self, X, Y, U):
         self.X = X
         self.Y = Y
         self.U = U
+
     def __len__(self):
         return self.X.shape[0]
+
     def __getitem__(self, idx):
         return self.X[idx], self.Y[idx], self.U[idx]
 
+
 Train_dataset = PairDataset(Xtrain, Ytrain, Utrain)
-Test_dataset  = PairDataset(Xtest,  Ytest,  Utest)
+Test_dataset = PairDataset(Xtest,  Ytest,  Utest)
 
 num_sample = len(Train_dataset)
 
@@ -130,7 +137,8 @@ learning_rate = 1e-3
 batch_size = max(128, int(num_sample/10))
 
 train_loader = DataLoader(Train_dataset, batch_size=batch_size, shuffle=True)
-test_loader  = DataLoader(Test_dataset,  batch_size=len(Test_dataset), shuffle=False)
+test_loader = DataLoader(
+    Test_dataset,  batch_size=len(Test_dataset), shuffle=False)
 
 print("batch_size =", batch_size, "learning_rate =", learning_rate)
 
@@ -156,6 +164,7 @@ SessionName = (
 
 print("SessionName:", SessionName)
 
+
 class Encoder(nn.Module):
     def __init__(self, params, name="encoder"):
         super().__init__()
@@ -172,7 +181,8 @@ class Encoder(nn.Module):
             )
 
         for j in range(len(self.shape) - 1):
-            self.aux_layers.append(nn.Linear(self.shape[j], self.shape[j + 1], bias=False))
+            self.aux_layers.append(
+                nn.Linear(self.shape[j], self.shape[j + 1], bias=False))
 
     def forward(self, x):
         x_true = x
@@ -190,6 +200,7 @@ class Encoder(nn.Module):
                 else:
                     raise ValueError(f"Unknown activation: {self.activation}")
         return torch.cat((x_true, z), dim=-1)  # z_lift = [x; features]
+
 
 class MyArchitechture(nn.Module):
     def __init__(self, params):
@@ -213,7 +224,7 @@ class MyArchitechture(nn.Module):
         dim = self.dimA
         M = self.L @ self.L.T + self.epsI
         Fm = M[dim:, :dim]
-        P  = M[dim:, dim:]
+        P = M[dim:, dim:]
         Skew = (self.R - self.R.T) / 2.0
         E = (M[:dim, :dim] + P) / 2.0 + Skew
         A = torch.linalg.solve(E, Fm)  # (dimA,dimA)
@@ -226,11 +237,13 @@ class MyArchitechture(nn.Module):
 
         if Stable_A == 1:
             A = self._stable_A()
-            z_next = z1 @ A.T + self.linB(u)   # IMPORTANT: B from linB, A functional
+            # IMPORTANT: B from linB, A functional
+            z_next = z1 @ A.T + self.linB(u)
         else:
             z_next = self.linA(z1) + self.linB(u)
 
         return y, z_next
+
 
 model = MyArchitechture(params).to(device)
 print(model)
@@ -260,6 +273,7 @@ H = 10
 K_windows = 96
 print(f"H={H}, K_windows={K_windows}, lam_circle={lam_circle}, lam_phase={lam_phase}")
 
+
 def project_unit_circle(x):
     s = x[..., SIN_IDX]
     c = x[..., COS_IDX]
@@ -276,10 +290,12 @@ def project_unit_circle(x):
             parts.append(x[..., j].unsqueeze(-1))
     return torch.cat(parts, dim=-1)
 
+
 def unit_circle_penalty(x_pred):
     s = x_pred[..., SIN_IDX]
     c = x_pred[..., COS_IDX]
     return torch.mean((s*s + c*c - 1.0)**2)
+
 
 def yaw_phase_loss(x_true, x_pred):
 
@@ -289,13 +305,16 @@ def yaw_phase_loss(x_true, x_pred):
     d = (psi_p - psi_t + np.pi) % (2*np.pi) - np.pi
     return torch.mean(d*d)
 
+
 # weights for multi-step state MSE (normalized-space)
 w_state = torch.tensor([1.0, 1.5, 4.0, 4.0, 2.2, 2.2, 1.8], device=device)
+
 
 def weighted_state_mse(x_true, x_pred):
     diff2 = (x_true - x_pred) ** 2
     w_view = w_state.view(*([1] * (diff2.ndim - 1)), -1)
     return torch.mean(diff2 * w_view)
+
 
 def get_A_B(model):
     if Stable_A == 1:
@@ -304,6 +323,7 @@ def get_A_B(model):
         A = model.linA.weight
     Bm = model.linB.weight
     return A, Bm
+
 
 def multistep_rollout_pred(model, x0, U_seq):
 
@@ -319,6 +339,7 @@ def multistep_rollout_pred(model, x0, U_seq):
         preds.append(x_next.unsqueeze(1))
         z = torch.cat([x_next, z_next[:, num_state:]], dim=1)
     return torch.cat(preds, dim=1)
+
 
 @torch.no_grad()
 def strict_eval_multistep(model, X0, U, X_true):
@@ -346,6 +367,7 @@ def strict_eval_multistep(model, X0, U, X_true):
     sc = torch.mean(pred[:, SIN_IDX]**2 + pred[:, COS_IDX]**2).item()
     return mse, sc, pred
 
+
 loss_train = []
 loss_test_one = []
 loss_test_multi = []
@@ -357,7 +379,9 @@ for epoch in range(num_epochs):
     model.train()
     running = 0.0
     for x1, x2, u in train_loader:
-        x1 = x1.to(device); x2 = x2.to(device); u = u.to(device)
+        x1 = x1.to(device)
+        x2 = x2.to(device)
+        u = u.to(device)
 
         y, yhat = model(x1, x2, u)
         loss_1s = loss_fcn(y, yhat)
@@ -377,17 +401,20 @@ for epoch in range(num_epochs):
     model.train()
     if Xtrain.shape[0] > (H + 2):
         # contiguous windows start indices
-        idx0 = torch.randint(low=0, high=Xtrain.shape[0] - (H + 1), size=(K_windows,), device=device)
+        idx0 = torch.randint(
+            low=0, high=Xtrain.shape[0] - (H + 1), size=(K_windows,), device=device)
 
         x0 = Xtrain[idx0, :].to(device)  # (K,7)
-        Uwin = torch.stack([Utrain[idx0 + j, :].to(device) for j in range(H)], dim=1)   # (K,H,8)
-        Xtrue = torch.stack([Xtrain[idx0 + j + 1, :].to(device) for j in range(H)], dim=1)  # (K,H,7)
+        Uwin = torch.stack([Utrain[idx0 + j, :].to(device)
+                           for j in range(H)], dim=1)   # (K,H,8)
+        Xtrue = torch.stack([Xtrain[idx0 + j + 1, :].to(device)
+                            for j in range(H)], dim=1)  # (K,H,7)
 
         Xpred = multistep_rollout_pred(model, x0, Uwin)
 
         loss_ms = weighted_state_mse(Xtrue, Xpred)
-        loss_c  = unit_circle_penalty(Xpred)
-        loss_p  = yaw_phase_loss(Xtrue, Xpred)
+        loss_c = unit_circle_penalty(Xpred)
+        loss_p = yaw_phase_loss(Xtrue, Xpred)
 
         loss_total = alpha_ms_state * loss_ms + lam_circle * loss_c + lam_phase * loss_p
 
@@ -401,13 +428,16 @@ for epoch in range(num_epochs):
     model.eval()
     with torch.no_grad():
         x1t, x2t, ut = next(iter(test_loader))
-        x1t = x1t.to(device); x2t = x2t.to(device); ut = ut.to(device)
+        x1t = x1t.to(device)
+        x2t = x2t.to(device)
+        ut = ut.to(device)
         yt, yhatt = model(x1t, x2t, ut)
         one_step = loss_fcn(yt, yhatt).item()
         loss_test_one.append(one_step)
 
     X0 = Xtest[0:1, :].to(device)
-    mse_multi, sc_pred, _ = strict_eval_multistep(model, X0, Utest.to(device), Xtest.to(device))
+    mse_multi, sc_pred, _ = strict_eval_multistep(
+        model, X0, Utest.to(device), Xtest.to(device))
     loss_test_multi.append(mse_multi)
 
     score = mse_multi if multi_step == 1 else one_step
@@ -416,7 +446,8 @@ for epoch in range(num_epochs):
     if score < best_score:
         best_score = score
         best_epoch = epoch
-        torch.save({"epoch": epoch, "state_dict": model.state_dict()}, SessionName + "-best.pt")
+        torch.save({"epoch": epoch, "state_dict": model.state_dict()},
+                   SessionName + "-best.pt")
         print("  -> New best:", best_score)
 
 print("Best epoch:", best_epoch, "best score:", best_score)
@@ -454,6 +485,8 @@ print("Saved:", "Koopman_" + SessionName + ".mat")
 print("A:", A.shape, "B:", B.shape, "C:", C.shape)
 
 # ---- strict open-loop rollout on test set (normalized) ----
+
+
 @torch.no_grad()
 def strict_rollout_full(model, X0, U, T):
     model.eval()
@@ -472,7 +505,8 @@ def strict_rollout_full(model, X0, U, T):
         z_next = z @ Aev.T + U[k:k+1, :] @ Bev.T
         x_next = z_next[:, :num_state]
         # project sin/cos
-        s = x_next[:, SIN_IDX]; c = x_next[:, COS_IDX]
+        s = x_next[:, SIN_IDX]
+        c = x_next[:, COS_IDX]
         n = torch.sqrt(s*s + c*c + 1e-12)
         x_next = torch.cat([
             x_next[:, 0:2],
@@ -485,6 +519,7 @@ def strict_rollout_full(model, X0, U, T):
 
     return pred
 
+
 X0 = Xtest[0:1, :].to(device)
 Uv = Utest.to(device)
 Xtrue = Xtest.to(device)
@@ -496,7 +531,8 @@ mse_norm = torch.mean((pred - Xtrue)**2).item()
 sc_true = torch.mean(Xtrue[:, SIN_IDX]**2 + Xtrue[:, COS_IDX]**2).item()
 sc_pred = torch.mean(pred[:, SIN_IDX]**2 + pred[:, COS_IDX]**2).item()
 print("STRICT open-loop MSE (normalized):", mse_norm)
-print(f"Mean(sin^2+cos^2): true={sc_true:.4f}, pred={sc_pred:.4f} (ideal ~1.0)")
+print(
+    f"Mean(sin^2+cos^2): true={sc_true:.4f}, pred={sc_pred:.4f} (ideal ~1.0)")
 
 # Denormalize to physical units
 pred_np = pred.detach().cpu().numpy()
@@ -505,13 +541,13 @@ true_np = Xtrue.detach().cpu().numpy()
 pred_phys = pred_np * X_std + X_mean
 true_phys = true_np * X_std + X_mean
 
-phi_t,   phi_p   = true_phys[:, 0], pred_phys[:, 0]
-th_t,    th_p    = true_phys[:, 1], pred_phys[:, 1]
-sin_t,   sin_p   = true_phys[:, 2], pred_phys[:, 2]
-cos_t,   cos_p   = true_phys[:, 3], pred_phys[:, 3]
-p_t,     p_p     = true_phys[:, 4], pred_phys[:, 4]
-q_t,     q_p     = true_phys[:, 5], pred_phys[:, 5]
-r_t,     r_p     = true_phys[:, 6], pred_phys[:, 6]
+phi_t,   phi_p = true_phys[:, 0], pred_phys[:, 0]
+th_t,    th_p = true_phys[:, 1], pred_phys[:, 1]
+sin_t,   sin_p = true_phys[:, 2], pred_phys[:, 2]
+cos_t,   cos_p = true_phys[:, 3], pred_phys[:, 3]
+p_t,     p_p = true_phys[:, 4], pred_phys[:, 4]
+q_t,     q_p = true_phys[:, 5], pred_phys[:, 5]
+r_t,     r_p = true_phys[:, 6], pred_phys[:, 6]
 
 psi_t = np.unwrap(np.arctan2(sin_t, cos_t))
 psi_p = np.unwrap(np.arctan2(sin_p, cos_p))
@@ -527,13 +563,15 @@ series = [
     ("r [rad/s]",   r_t,    r_p),
 ]
 
-fig, axes = plt.subplots(len(series), 1, sharex=True, figsize=(11, 2.2 * len(series)))
+fig, axes = plt.subplots(len(series), 1, sharex=True,
+                         figsize=(11, 2.2 * len(series)))
 for i, (name, yt, yp) in enumerate(series):
     axes[i].plot(t_idx, yt, label="true", linestyle="solid")
     axes[i].plot(t_idx, yp, label="pred", linestyle="dashed")
     axes[i].set_ylabel(name)
     axes[i].legend(loc="upper right")
-axes[0].set_title("STRICT open-loop rollout (physical units) | inputs = desired attitude + throttle + actuators")
+axes[0].set_title(
+    "STRICT open-loop rollout (physical units) | inputs = desired attitude + throttle + actuators")
 axes[-1].set_xlabel("sample index")
 fig.tight_layout()
 plt.show()
@@ -542,9 +580,6 @@ plt.show()
 # BLOCK 7 — Extract Koopman A,B,C (discrete-time) + Save to MAT
 # ============================================================
 
-import numpy as np
-import torch
-from scipy.io import savemat
 
 # --- Load best checkpoint ---
 ckpt_path = SessionName + "-best.pt"
@@ -586,6 +621,7 @@ savemat(mat_name, {
     "U_std":  np.asarray(U_std, dtype=float),
 })
 
+# TODO: Xander -> Convert this to a JSON format like in the matrix_example.json file
 print("Saved:", mat_name)
 print("A:", A.shape, "B:", B.shape, "C:", C.shape)
 print("A = ", A)
