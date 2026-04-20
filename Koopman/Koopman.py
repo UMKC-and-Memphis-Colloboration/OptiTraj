@@ -14,6 +14,7 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 
 from scipy.io import savemat
+import json
 
 # Your custom modules (must exist)
 from Library import RBFLayer1, ListModule
@@ -627,3 +628,14 @@ print("A:", A.shape, "B:", B.shape, "C:", C.shape)
 print("A = ", A)
 print("B = ", B)
 print("C = ", C)
+
+data = {
+    "model_name": mat_name,
+    "dt": dt,
+    "A": A.tolist(),
+    "B": B.tolist()
+}
+
+with open("Koopman/model_results.json", "w") as f:
+    json.dump(data, f, indent=2)
+print("Saved model results to model_results.json")
