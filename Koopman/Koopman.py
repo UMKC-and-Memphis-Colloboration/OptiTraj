@@ -35,7 +35,7 @@ multi_step = 1    # selection metric: multi-step vs one-step
 #   u = [phi_des, theta_des, sin(psi_des), cos(psi_des), ThO, C1, C2, C4]
 # ============================================================
 
-df = pd.read_csv("SimulatedData_01142026.csv").dropna().reset_index(drop=True)
+df = pd.read_csv("calibration_data.csv").dropna().reset_index(drop=True)
 
 t = df["IMU_t"].to_numpy(dtype=float)
 dt = float(np.median(np.diff(t)))
