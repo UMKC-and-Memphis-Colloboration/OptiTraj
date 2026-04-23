@@ -128,6 +128,14 @@ class PlaneOptControl(OptimalControlProblem):
         if self.obs_params is None:
             raise ValueError("obs_params is None")
 
+    def _parameter_length(self) -> int:
+        """
+        The length of the parameters for the optimization problem
+        For obstacle avoidance this would be the number of obstacles
+        For a simple trajectory optimization problem this would be 0
+        """
+        return super()._parameter_length()
+
     def compute_dynamics_cost(self) -> ca.MX:
         """
         Compute the dynamics cost for the optimal control problem
