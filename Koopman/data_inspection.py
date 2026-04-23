@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 # LOAD DATA
 # ============================================================
 
-csv_path = "/home/cuav/OptiTraj/Koopman/csv_files/calibration_data.csv"
+csv_path = "Koopman/csv_files/calibration_data.csv"
 df = pd.read_csv(csv_path)
 
 t = df["t"]

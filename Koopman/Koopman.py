@@ -35,7 +35,7 @@ multi_step = 1    # selection metric: multi-step vs one-step
 #   u = [phi_des, theta_des, sin(psi_des), cos(psi_des), ThO, C1, C2, C4]
 # ============================================================
 
-filepath = "/home/cuav/OptiTraj/Koopman/csv_files/calibration_data.csv"
+filepath = "Koopman/csv_files/calibration_data.csv"
 
 df = pd.read_csv(filepath).dropna().reset_index(drop=True)
 

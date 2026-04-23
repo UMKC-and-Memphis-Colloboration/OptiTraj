@@ -197,7 +197,7 @@ def parse_bin(
     print(f"Saved calibrated flight matrix → {output_file}")
 
 if __name__ == "__main__":
-    binaries_folder = "/home/cuav/OptiTraj/Koopman/binaries"
+    binaries_folder = "Koopman/binaries"
     bin_name = "00000091"
 
     data_config = {
