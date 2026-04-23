@@ -35,9 +35,11 @@ multi_step = 1    # selection metric: multi-step vs one-step
 #   u = [phi_des, theta_des, sin(psi_des), cos(psi_des), ThO, C1, C2, C4]
 # ============================================================
 
-df = pd.read_csv("calibration_data.csv").dropna().reset_index(drop=True)
+filepath = "/home/cuav/OptiTraj/Koopman/csv_files/calibration_data.csv"
 
-t = df["IMU_t"].to_numpy(dtype=float)
+df = pd.read_csv(filepath).dropna().reset_index(drop=True)
+
+t = df["t"].to_numpy(dtype=float)
 dt = float(np.median(np.diff(t)))
 print("N =", len(df), "dt~", dt)
 
