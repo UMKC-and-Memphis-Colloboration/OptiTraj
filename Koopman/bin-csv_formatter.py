@@ -119,9 +119,9 @@ def build_flight_matrix(dfs: Dict[str, pd.DataFrame], hz: float = 50.0) -> pd.Da
     # Merge all
     return pd.concat(aligned, axis=1)
 
-def butter_lowpass_filter(data, cutoff_hz, fs, order=2):
-    nyq = 0.5 * fs
-    normal_cutoff = cutoff_hz / nyq
+def butter_lowpass_filter(data, cutoff_hz: float, fs: float, order=2):
+    nyq: float = 0.5 * fs
+    normal_cutoff: float = cutoff_hz / nyq
 
     b, a = butter(order, normal_cutoff, btype='low', analog=False)
     return filtfilt(b, a, data)
