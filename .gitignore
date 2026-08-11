@@ -171,3 +171,4 @@ Koopman/binaries/*
 !Koopman/binaries/.gitkeep
 Koopman/csv_files/*
 !Koopman/csv_files/.gitkeep
+!Koopman/model_results.json

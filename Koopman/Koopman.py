@@ -35,7 +35,7 @@ multi_step = 1    # selection metric: multi-step vs one-step
 #   u = [phi_des, theta_des, sin(psi_des), cos(psi_des), ThO, C1, C2, C4]
 # ============================================================
 
-filepath = "Koopman/csv_files/calibration_data.csv"
+filepath = "/home/cuav/memphis_gnc_work/ros_docker_template/OptiTraj/Koopman/csv_files/calibration_data.csv"
 
 df = pd.read_csv(filepath).dropna().reset_index(drop=True)
 
@@ -638,6 +638,6 @@ data = {
     "B": B.tolist()
 }
 
-with open("Koopman/model_results.json", "w") as f:
+with open("/home/cuav/memphis_gnc_work/ros_docker_template/OptiTraj/Koopman/model_results.json", "w") as f:
     json.dump(data, f, indent=2)
 print("Saved model results to model_results.json")

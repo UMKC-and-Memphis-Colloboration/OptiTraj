@@ -197,8 +197,8 @@ def parse_bin(
     print(f"Saved calibrated flight matrix → {output_file}")
 
 if __name__ == "__main__":
-    binaries_folder = "Koopman/binaries"
-    bin_name = "00000091"
+    binaries_folder = "/home/cuav/memphis_gnc_work/ros_docker_template/OptiTraj/Koopman/binaries"
+    bin_name = "00000007"
 
     data_config = {
         "IMU": ["TimeUS", "AccX", "AccY", "AccZ", "GyrX", "GyrY", "GyrZ"],
