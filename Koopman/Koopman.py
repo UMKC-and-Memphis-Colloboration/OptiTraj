@@ -7,9 +7,12 @@
 
 import os
 import sys
+
+import json
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
+from pathlib import Path
 
 import torch
 import torch.nn as nn
@@ -38,9 +41,10 @@ multi_step = 1    # selection metric: multi-step vs one-step
 #   u = [phi_des, theta_des, sin(psi_des), cos(psi_des), ThO, C1, C2, C4]
 # ============================================================
 
-df = pd.read_csv("SimulatedData_01142026.csv").dropna().reset_index(drop=True)
+calibration_data_path = Path(__file__).resolve().parent / "csv_files" / "calibration_data.csv"
+df = pd.read_csv(calibration_data_path).dropna().reset_index(drop=True)
 
-t = df["IMU_t"].to_numpy(dtype=float)
+t = df["t"].to_numpy(dtype=float)
 dt = float(np.median(np.diff(t)))
 print("N =", len(df), "dt~", dt)
 
@@ -71,9 +75,9 @@ cos_psi_d = np.cos(psi_d)
 tho = df["CTUN_ThO"].to_numpy(dtype=float)
 
 # ---- Actuator outputs (PWM) -> approx normalized [-1,1] ----
-c1 = (df["RCOU_C1"].to_numpy(dtype=float) - 1500.0) / 500.0
-c2 = (df["RCOU_C2"].to_numpy(dtype=float) - 1500.0) / 500.0
-c4 = (df["RCOU_C4"].to_numpy(dtype=float) - 1500.0) / 500.0
+c1 = (df["RCOU_C5"].to_numpy(dtype=float) - 1500.0) / 500.0
+c2 = (df["RCOU_C7"].to_numpy(dtype=float) - 1500.0) / 500.0
+c4 = (df["RCOU_C8"].to_numpy(dtype=float) - 1500.0) / 500.0
 
 u = np.vstack([phi_d, theta_d, sin_psi_d, cos_psi_d, tho, c1, c2, c4]).T.astype(np.float32)  # (N,8)
 
@@ -777,3 +781,16 @@ print("A = ", A)
 print("B = ", B)
 print("C = ", C)
 print("D = ", D)
+
+data = {
+    "model_name": mat_name,
+    "dt": dt,
+    "A": A.tolist(),
+    "B": B.tolist()
+}
+
+directory_path = Path(__file__).resolve().parent
+csv_file_path = directory_path / "model_results.json"
+with open(csv_file_path, "w") as f:
+    json.dump(data, f, indent=2)
+print("Saved model results to model_results.json")

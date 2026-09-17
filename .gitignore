@@ -172,3 +172,5 @@ Koopman/binaries/*
 Koopman/csv_files/*
 !Koopman/csv_files/.gitkeep
 !Koopman/model_results.json
+Koopman/*.mat
+Koopman/*.pt

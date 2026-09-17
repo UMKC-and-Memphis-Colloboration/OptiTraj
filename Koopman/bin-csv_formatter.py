@@ -169,14 +169,14 @@ def add_gyro_derivatives(df: pd.DataFrame, hz: float = 50.0) -> pd.DataFrame:
     return df
 
 def parse_bin(
-    binaries_folder: str,
+    binaries_folder: Path | str,
     bin_name: str,
     data_config: Dict[str, List[str]],
     output_name: str = "calibration_data.csv",
 ) -> None:
 
     bin_directory = Path(binaries_folder)
-    bin_path = bin_directory / f"{bin_name}.BIN"
+    bin_path = bin_directory / f"{bin_name}.bin"
 
     if not bin_path.exists():
         raise FileNotFoundError(bin_path)
@@ -197,12 +197,12 @@ def parse_bin(
     print(f"Saved calibrated flight matrix → {output_file}")
 
 if __name__ == "__main__":
-    binaries_folder = "/home/cuav/memphis_gnc_work/ros_docker_template/OptiTraj/Koopman/binaries"
-    bin_name = "00000007"
+    binaries_folder = Path(__file__).resolve().parent / "binaries"
+    bin_name = "2026-09-09 08-41-21"
 
     data_config = {
         "IMU": ["TimeUS", "AccX", "AccY", "AccZ", "GyrX", "GyrY", "GyrZ"],
-        "RCOU": ["TimeUS", "C1", "C2", "C3", "C4"],
+        "RCOU": ["TimeUS", "C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8"],
         "ATT": ["TimeUS", "Roll", "Pitch", "Yaw", "DesRoll", "DesPitch", "DesYaw"],
         "CTUN": ["TimeUS", "ThO"],
         "GPS": ["TimeUS", "Lat", "Lng", "Alt", "Spd"],

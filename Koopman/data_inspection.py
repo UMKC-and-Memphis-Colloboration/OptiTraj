@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+from pathlib import Path
 import pandas as pd
 import matplotlib.pyplot as plt
 
@@ -9,7 +10,7 @@ import matplotlib.pyplot as plt
 # LOAD DATA
 # ============================================================
 
-csv_path = "Koopman/csv_files/calibration_data.csv"
+csv_path = Path(__file__).resolve().parent / "csv_files" / "calibration_data.csv"
 df = pd.read_csv(csv_path)
 
 t = df["t"]
@@ -99,10 +100,10 @@ axs[-1].set_xlabel("Time [s]")
 # 5. RC COMMANDS (SUBPLOTS)
 # ============================================================
 
-fig, axs = plt.subplots(4, 1, figsize=(12, 8), sharex=True)
+fig, axs = plt.subplots(8, 1, figsize=(12, 8), sharex=True)
 fig.suptitle("RC Commands")
 
-channels = ["C1", "C2", "C3", "C4"]
+channels = ["C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8"]
 
 for i, ch in enumerate(channels):
     col = f"RCOU_{ch}"
