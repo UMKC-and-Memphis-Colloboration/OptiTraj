@@ -701,96 +701,545 @@ plt.show()
 
 
 # ============================================================
-# BLOCK 7 — Extract active Koopman A,B,C,D (discrete-time) + Save to MAT
+# BLOCK 7 — Export COMPLETE Koopman model for MPC
+#
+# Saves:
+#   A, B, C, D
+#   X_mean, X_std
+#   U_mean, U_std
+#   encoder_W1, encoder_W2
+#   sample_time
+#   state/input names
+#
+# The MPC can therefore reconstruct:
+#
+#   x_real
+#      ↓ normalize
+#   x_norm
+#      ↓ encoder
+#   z = [x_norm ; learned_features]
+#      ↓
+#   z[k+1] = A z[k] + B u_norm[k]
+#
 # ============================================================
 
 import numpy as np
 import torch
+import json
+
 from scipy.io import savemat
+from pathlib import Path
 
-# --- Load best checkpoint ---
+
+# ------------------------------------------------------------
+# Load best checkpoint
+# ------------------------------------------------------------
+
 ckpt_path = SessionName + "-best.pt"
-ckpt = torch.load(ckpt_path, map_location=device)
 
-if "state_dict" in ckpt:
-    model.load_state_dict(ckpt["state_dict"])
-else:
-    raise KeyError("Checkpoint does not contain 'state_dict'.")
+ckpt = torch.load(
+    ckpt_path,
+    map_location=device,
+)
+
+if "state_dict" not in ckpt:
+    raise KeyError(
+        "Checkpoint does not contain 'state_dict'."
+    )
+
+model.load_state_dict(
+    ckpt["state_dict"]
+)
 
 model.eval()
 
-# --- Extract the matrices actually used by the trained model ---
+
+# ------------------------------------------------------------
+# Extract active Koopman A and B
+# ------------------------------------------------------------
+
 with torch.no_grad():
+
     if Stable_A == 1:
-        A_t = model._stable_A().detach().cpu()  # active stable A
+
+        # Matrix actually used by the stable-A model
+        A_t = (
+            model
+            ._stable_A()
+            .detach()
+            .cpu()
+        )
+
     else:
-        A_t = model.linA.weight.detach().cpu()  # active unconstrained A
-    B_t = model.linB.weight.detach().cpu()   # (dimA, num_input)
+
+        # Matrix actually used by unconstrained model
+        A_t = (
+            model
+            .linA
+            .weight
+            .detach()
+            .cpu()
+        )
+
+    # Input matrix
+    B_t = (
+        model
+        .linB
+        .weight
+        .detach()
+        .cpu()
+    )
+
 
 A = A_t.numpy()
 B = B_t.numpy()
 
 dimA = A.shape[0]
-assert A.shape == (dimA, dimA)
-assert B.shape[0] == dimA and B.shape[1] == num_input
 
-# --- Construct C so x = C z ---
-# z = [x; lift(x)]  => first num_state elements are x
-C = np.zeros((num_state, dimA), dtype=float)
-C[:, :num_state] = np.eye(num_state)
 
-# No direct input-to-output feedthrough is present in this architecture.
-D = np.zeros((num_state, num_input), dtype=float)
+# ------------------------------------------------------------
+# Validate dimensions
+# ------------------------------------------------------------
 
-assert C.shape == (num_state, dimA)
-assert D.shape == (num_state, num_input)
+assert A.shape == (
+    dimA,
+    dimA,
+), f"Bad A shape: {A.shape}"
 
-# --- Save to MATLAB ---
-# MATLAB/Simulink export.
-# The descriptive archive filename prevents results from different model
-# dimensions from silently overwriting one another.
+assert B.shape == (
+    dimA,
+    num_input,
+), f"Bad B shape: {B.shape}"
+
+
+# ------------------------------------------------------------
+# Construct C and D
+#
+# Lift structure is:
+#
+#     z = [x_norm ; learned_features]
+#
+# Therefore the first num_state entries of z are exactly
+# the normalized physical states.
+# ------------------------------------------------------------
+
+C = np.zeros(
+    (
+        num_state,
+        dimA,
+    ),
+    dtype=float,
+)
+
+C[:, :num_state] = np.eye(
+    num_state
+)
+
+D = np.zeros(
+    (
+        num_state,
+        num_input,
+    ),
+    dtype=float,
+)
+
+
+assert C.shape == (
+    num_state,
+    dimA,
+)
+
+assert D.shape == (
+    num_state,
+    num_input,
+)
+
+
+# ============================================================
+# NEW — Extract neural Koopman encoder weights
+# ============================================================
+
+encoder_weights = []
+
+with torch.no_grad():
+
+    for i, layer in enumerate(
+        model.lift.aux_layers
+    ):
+
+        W = (
+            layer
+            .weight
+            .detach()
+            .cpu()
+            .numpy()
+        )
+
+        encoder_weights.append(W)
+
+        print(
+            f"Encoder layer {i}:",
+            W.shape,
+        )
+
+
+# Your current architecture should have exactly two layers:
+#
+#     x_norm
+#       ↓ W1 + tanh
+#     hidden
+#       ↓ W2 + tanh
+#     learned_features
+#
+# because:
+#
+#     lift_shape =
+#         [num_state, lift_width, lift_width]
+
+if len(encoder_weights) != 2:
+
+    raise ValueError(
+        "Expected exactly 2 encoder layers, "
+        f"but found {len(encoder_weights)}."
+    )
+
+
+W1 = encoder_weights[0]
+W2 = encoder_weights[1]
+
+
+# ------------------------------------------------------------
+# Validate encoder dimensions
+# ------------------------------------------------------------
+
+expected_lift_dim = (
+    dimA - num_state
+)
+
+if W1.shape[1] != num_state:
+
+    raise ValueError(
+        "Encoder W1 input dimension does not match "
+        f"num_state={num_state}. "
+        f"W1 shape={W1.shape}"
+    )
+
+if W2.shape[0] != expected_lift_dim:
+
+    raise ValueError(
+        "Final encoder output dimension does not match "
+        "Koopman lifted feature dimension. "
+        f"W2={W2.shape}, "
+        f"expected output={expected_lift_dim}"
+    )
+
+
+print()
+print("==========================================")
+print("COMPLETE KOOPMAN MODEL")
+print("==========================================")
+print("A:", A.shape)
+print("B:", B.shape)
+print("C:", C.shape)
+print("D:", D.shape)
+print("W1:", W1.shape)
+print("W2:", W2.shape)
+print("Physical states:", num_state)
+print("Inputs:", num_input)
+print("Koopman dimension:", dimA)
+print("dt:", dt)
+print("==========================================")
+print()
+
+
+# ============================================================
+# Save complete MAT file
+# ============================================================
+
 mat_name = "Koopman_ABCD.mat"
-archive_mat_name = "Koopman_ABCD_" + SessionName + ".mat"
+
+archive_mat_name = (
+    "Koopman_ABCD_"
+    + SessionName
+    + ".mat"
+)
+
+
 mat_payload = {
-    "A": A,
-    "B": B,
-    "C": C,
-    "D": D,
-    "sample_time": np.array([[float(dt)]], dtype=float),
-    "koopman_dimension": np.array([[dimA]], dtype=np.int32),
+
+    # --------------------------------------------------------
+    # Koopman system
+    # --------------------------------------------------------
+
+    "A": np.asarray(
+        A,
+        dtype=float,
+    ),
+
+    "B": np.asarray(
+        B,
+        dtype=float,
+    ),
+
+    "C": np.asarray(
+        C,
+        dtype=float,
+    ),
+
+    "D": np.asarray(
+        D,
+        dtype=float,
+    ),
+
+
+    # --------------------------------------------------------
+    # NEW: neural lifting function
+    # --------------------------------------------------------
+
+    "encoder_W1": np.asarray(
+        W1,
+        dtype=float,
+    ),
+
+    "encoder_W2": np.asarray(
+        W2,
+        dtype=float,
+    ),
+
+
+    # --------------------------------------------------------
+    # Normalization
+    # --------------------------------------------------------
+
+    "X_mean": np.asarray(
+        X_mean,
+        dtype=float,
+    ),
+
+    "X_std": np.asarray(
+        X_std,
+        dtype=float,
+    ),
+
+    "U_mean": np.asarray(
+        U_mean,
+        dtype=float,
+    ),
+
+    "U_std": np.asarray(
+        U_std,
+        dtype=float,
+    ),
+
+
+    # --------------------------------------------------------
+    # Model metadata
+    # --------------------------------------------------------
+
+    "sample_time": np.array(
+        [[float(dt)]],
+        dtype=float,
+    ),
+
+    "koopman_dimension": np.array(
+        [[dimA]],
+        dtype=np.int32,
+    ),
+
+    "physical_state_dimension": np.array(
+        [[num_state]],
+        dtype=np.int32,
+    ),
+
+    "input_dimension": np.array(
+        [[num_input]],
+        dtype=np.int32,
+    ),
+
+
+    # --------------------------------------------------------
+    # Architecture metadata
+    # --------------------------------------------------------
+
+    "activation": np.asarray(
+        ["tanh"],
+        dtype=object,
+    ),
+
+    "encoder_num_layers": np.array(
+        [[len(encoder_weights)]],
+        dtype=np.int32,
+    ),
+
+
+    # --------------------------------------------------------
+    # Names
+    # --------------------------------------------------------
+
     "state_names": np.asarray(
-        ["phi", "theta", "sin_psi", "cos_psi", "p", "q", "r"],
+        [
+            "phi",
+            "theta",
+            "sin_psi",
+            "cos_psi",
+            "p",
+            "q",
+            "r",
+        ],
         dtype=object,
     ),
+
     "input_names": np.asarray(
-        ["phiD", "thetaD", "sinpsiD", "cospsiD", "ThO", "C1", "C2", "C4"],
+        [
+            "phiD",
+            "thetaD",
+            "sinpsiD",
+            "cospsiD",
+            "ThO",
+            "C1",
+            "C2",
+            "C4",
+        ],
         dtype=object,
     ),
-    "X_mean": np.asarray(X_mean, dtype=float),
-    "X_std":  np.asarray(X_std, dtype=float),
-    "U_mean": np.asarray(U_mean, dtype=float),
-    "U_std":  np.asarray(U_std, dtype=float),
 }
-savemat(mat_name, mat_payload, do_compression=True)
-savemat(archive_mat_name, mat_payload, do_compression=True)
 
-print("Saved:", mat_name)
-print("Archived as:", archive_mat_name)
-print("A:", A.shape, "B:", B.shape, "C:", C.shape, "D:", D.shape)
-print("A = ", A)
-print("B = ", B)
-print("C = ", C)
-print("D = ", D)
 
-data = {
+# ------------------------------------------------------------
+# Save normal and archive versions
+# ------------------------------------------------------------
+
+savemat(
+    mat_name,
+    mat_payload,
+    do_compression=True,
+)
+
+savemat(
+    archive_mat_name,
+    mat_payload,
+    do_compression=True,
+)
+
+
+print(
+    "Saved:",
+    mat_name
+)
+
+print(
+    "Archived as:",
+    archive_mat_name
+)
+
+
+# ============================================================
+# Optional JSON export
+#
+# This now contains enough information to reproduce the model
+# without PyTorch as well.
+# ============================================================
+
+json_payload = {
+
     "model_name": mat_name,
-    "dt": dt,
+
+    "dt": float(dt),
+
+    "koopman_dimension": int(
+        dimA
+    ),
+
+    "physical_state_dimension": int(
+        num_state
+    ),
+
+    "input_dimension": int(
+        num_input
+    ),
+
+    "activation": "tanh",
+
+    "state_names": [
+        "phi",
+        "theta",
+        "sin_psi",
+        "cos_psi",
+        "p",
+        "q",
+        "r",
+    ],
+
+    "input_names": [
+        "phiD",
+        "thetaD",
+        "sinpsiD",
+        "cospsiD",
+        "ThO",
+        "C1",
+        "C2",
+        "C4",
+    ],
+
     "A": A.tolist(),
-    "B": B.tolist()
+    "B": B.tolist(),
+    "C": C.tolist(),
+    "D": D.tolist(),
+
+    "X_mean": (
+        np.asarray(X_mean)
+        .reshape(-1)
+        .tolist()
+    ),
+
+    "X_std": (
+        np.asarray(X_std)
+        .reshape(-1)
+        .tolist()
+    ),
+
+    "U_mean": (
+        np.asarray(U_mean)
+        .reshape(-1)
+        .tolist()
+    ),
+
+    "U_std": (
+        np.asarray(U_std)
+        .reshape(-1)
+        .tolist()
+    ),
+
+    # NEW
+    "encoder_W1": W1.tolist(),
+    "encoder_W2": W2.tolist(),
 }
 
-directory_path = Path(__file__).resolve().parent
-csv_file_path = directory_path / "model_results.json"
-with open(csv_file_path, "w") as f:
-    json.dump(data, f, indent=2)
-print("Saved model results to model_results.json")
+
+directory_path = (
+    Path(__file__)
+    .resolve()
+    .parent
+)
+
+json_file_path = (
+    directory_path
+    / "model_results.json"
+)
+
+with open(
+    json_file_path,
+    "w",
+) as f:
+
+    json.dump(
+        json_payload,
+        f,
+        indent=2,
+    )
+
+
+print(
+    "Saved complete model JSON:",
+    json_file_path,
+)

@@ -1054,7 +1054,358 @@ class KoopmanOptControl(
 # Main
 # ============================================================
 
+
+# ============================================================
+# Hybrid Koopman + Plane Plant
+# ============================================================
+
+class KoopmanPlanePlant:
+    """
+    Hybrid plant model.
+
+    Koopman supplies:
+        phi, theta, psi, p, q, r dynamics
+
+    Simple fixed-wing kinematics supply:
+        x, y, z translation
+
+    Separate first-order airspeed dynamics supply:
+        v
+
+    Full returned plant state:
+
+        [x, y, z, phi, theta, psi, v, p, q, r]
+
+    IMPORTANT:
+    The full lifted Koopman state is preserved internally.
+    """
+
+    def __init__(
+        self,
+        koopman_model: KoopManModel,
+        dt: float,
+        initial_speed: float = 25.0,
+        airspeed_tau: float = 0.5,
+    ):
+
+        self.koopman_model = koopman_model
+        self.dt = float(dt)
+
+        self.airspeed_tau = float(
+            airspeed_tau
+        )
+
+        self.position = np.zeros(
+            3,
+            dtype=float,
+        )
+
+        self.v = float(
+            initial_speed
+        )
+
+        self.z_koopman = None
+
+        self.physical_attitude_state = None
+
+    # ========================================================
+    # Initialize plant
+    # ========================================================
+
+    def initialize(
+        self,
+        position: np.ndarray,
+        phi: float,
+        theta: float,
+        psi: float,
+        p: float = 0.0,
+        q: float = 0.0,
+        r: float = 0.0,
+        airspeed: float = 25.0,
+    ):
+
+        self.position = np.asarray(
+            position,
+            dtype=float,
+        ).reshape(3)
+
+        self.v = float(
+            airspeed
+        )
+
+        x_attitude = np.array([
+            phi,
+            theta,
+            np.sin(psi),
+            np.cos(psi),
+            p,
+            q,
+            r,
+        ], dtype=float)
+
+        # Lift once for model-in-the-loop propagation.
+        self.z_koopman = (
+            self.koopman_model
+            .lift_state(
+                x_attitude
+            )
+        )
+
+        self.physical_attitude_state = (
+            x_attitude.copy()
+        )
+
+    # ========================================================
+    # Koopman state -> physical aircraft attitude/rates
+    # ========================================================
+
+    def get_attitude_state(self):
+
+        if self.z_koopman is None:
+            raise RuntimeError(
+                "Plant has not been initialized."
+            )
+
+        x_att = (
+            self.koopman_model
+            .physical_state_numpy(
+                self.z_koopman
+            )
+        )
+
+        phi = float(
+            x_att[0]
+        )
+
+        theta = float(
+            x_att[1]
+        )
+
+        psi = float(
+            np.arctan2(
+                x_att[2],
+                x_att[3],
+            )
+        )
+
+        p = float(
+            x_att[4]
+        )
+
+        q = float(
+            x_att[5]
+        )
+
+        r = float(
+            x_att[6]
+        )
+
+        return (
+            phi,
+            theta,
+            psi,
+            p,
+            q,
+            r,
+        )
+
+    # ========================================================
+    # Return full physical plant state
+    # ========================================================
+
+    def get_full_state(self):
+
+        (
+            phi,
+            theta,
+            psi,
+            p,
+            q,
+            r,
+        ) = self.get_attitude_state()
+
+        return np.array([
+            self.position[0],
+            self.position[1],
+            self.position[2],
+            phi,
+            theta,
+            psi,
+            self.v,
+            p,
+            q,
+            r,
+        ], dtype=float)
+
+    # ========================================================
+    # One hybrid plant step
+    # ========================================================
+
+    def step(
+        self,
+        koopman_control: np.ndarray,
+        v_cmd: float = None,
+    ) -> np.ndarray:
+
+        if self.z_koopman is None:
+            raise RuntimeError(
+                "Plant has not been initialized."
+            )
+
+        koopman_control = np.asarray(
+            koopman_control,
+            dtype=float,
+        ).reshape(-1)
+
+        if (
+            koopman_control.size
+            != self.koopman_model.n_controls
+        ):
+            raise ValueError(
+                "koopman_control must contain "
+                f"{self.koopman_model.n_controls} controls."
+            )
+
+        # ====================================================
+        # 1. Koopman attitude dynamics
+        #
+        # $$
+        # z_{k+1}
+        # =
+        # A z_k
+        # +
+        # B_{\mathrm{real}}u_k
+        # +
+        # b_{\mathrm{real}}
+        # $$
+        # ====================================================
+
+        self.z_koopman = np.asarray(
+            self.koopman_model.function(
+                self.z_koopman,
+                koopman_control,
+            )
+        ).astype(float).reshape(-1)
+
+        # Keep physical yaw representation valid OUTSIDE MPC.
+        self.z_koopman = (
+            self.koopman_model
+            .project_yaw_numpy(
+                self.z_koopman
+            )
+        )
+
+        # ====================================================
+        # 2. Recover attitude and body rates
+        # ====================================================
+
+        (
+            phi,
+            theta,
+            psi,
+            p,
+            q,
+            r,
+        ) = self.get_attitude_state()
+
+        # ====================================================
+        # 3. Airspeed dynamics
+        #
+        # $$
+        # \dot v
+        # =
+        # \frac{v_{\mathrm{cmd}}-v}{\tau_v}
+        # $$
+        # ====================================================
+
+        if v_cmd is not None:
+
+            v_dot = (
+                float(v_cmd)
+                - self.v
+            ) / self.airspeed_tau
+
+            self.v += (
+                self.dt
+                * v_dot
+            )
+
+        # ====================================================
+        # 4. Translational plane kinematics
+        #
+        # Same convention as the original Plane model:
+        #
+        # $$
+        # \dot x
+        # =
+        # v\cos\theta\cos\psi
+        # $$
+        #
+        # $$
+        # \dot y
+        # =
+        # v\cos\theta\sin\psi
+        # $$
+        #
+        # $$
+        # \dot z
+        # =
+        # -v\sin\theta
+        # $$
+        # ====================================================
+
+        x_dot = (
+            self.v
+            * np.cos(theta)
+            * np.cos(psi)
+        )
+
+        y_dot = (
+            self.v
+            * np.cos(theta)
+            * np.sin(psi)
+        )
+
+        z_dot = (
+            -self.v
+            * np.sin(theta)
+        )
+
+        # Forward Euler translational integration
+        self.position[0] += (
+            self.dt
+            * x_dot
+        )
+
+        self.position[1] += (
+            self.dt
+            * y_dot
+        )
+
+        self.position[2] += (
+            self.dt
+            * z_dot
+        )
+
+        self.physical_attitude_state = np.array([
+            phi,
+            theta,
+            np.sin(psi),
+            np.cos(psi),
+            p,
+            q,
+            r,
+        ], dtype=float)
+
+        return self.get_full_state()
+
+
+
 if __name__ == "__main__":
+
+    # ========================================================
+    # Load learned Koopman model
+    # ========================================================
 
     koopman, dt = load_koopman_mat(
         mat_path="Koopman/Koopman_ABCD.mat",
@@ -1072,13 +1423,16 @@ if __name__ == "__main__":
         dt_val=dt,
     )
 
+    print()
     print("Koopman dimension:", model.n_states)
-    print("Physical states:", model.n_physical_states)
-    print("Controls:", model.n_controls)
+    print("Physical Koopman states:", model.n_physical_states)
+    print("Koopman controls:", model.n_controls)
     print("dt:", model.dt_val)
 
     # ========================================================
     # Lifted-state bounds
+    #
+    # These are numerical bounds on z, NOT aircraft limits.
     # ========================================================
 
     state_limits = {}
@@ -1086,26 +1440,38 @@ if __name__ == "__main__":
     for i in range(
         model.n_states
     ):
-
         state_limits[f"z{i}"] = {
             "min": -20.0,
             "max": 20.0,
         }
 
     # ========================================================
-    # Physical control bounds
+    # Koopman control bounds
+    #
+    # Input order:
+    #
+    # [
+    #   phiD,
+    #   thetaD,
+    #   sinpsiD,
+    #   cospsiD,
+    #   ThO,
+    #   C1,
+    #   C2,
+    #   C4
+    # ]
     # ========================================================
 
     control_limits = {
 
         "phiD": {
-            "min": np.deg2rad(-45),
-            "max": np.deg2rad(45),
+            "min": np.deg2rad(-45.0),
+            "max": np.deg2rad(45.0),
         },
 
         "thetaD": {
-            "min": np.deg2rad(-20),
-            "max": np.deg2rad(20),
+            "min": np.deg2rad(-20.0),
+            "max": np.deg2rad(20.0),
         },
 
         "sinpsiD": {
@@ -1149,37 +1515,49 @@ if __name__ == "__main__":
 
     # ========================================================
     # MPC weights
+    #
+    # Q:
+    #
+    # [phi, theta, sin(psi), cos(psi), p, q, r]
+    #
+    # R:
+    #
+    # penalty on Delta-u
     # ========================================================
 
     Q = np.diag([
-        20.0,   # phi
-        20.0,   # theta
-        10.0,   # sin psi
-        10.0,   # cos psi
-        5.0,    # p
-        5.0,    # q
-        5.0,    # r
+        np.deg2rad(20.0),   # phi
+        np.deg2rad(20.0),   # theta
+        np.deg2rad(10.0),   # sin psi
+        np.deg2rad(10.0),   # cos psi
+        np.deg2rad(5.0),    # p
+        np.deg2rad(5.0),    # q
+        np.deg2rad(5.0),    # r
     ])
 
     R = np.diag([
         0.10,   # Delta phiD
         0.10,   # Delta thetaD
-        0.05,   # Delta sin psi D
-        0.05,   # Delta cos psi D
-        0.02,   # Delta throttle
+        0.05,   # Delta sinpsiD
+        0.05,   # Delta cospsiD
+        0.02,   # Delta ThO
         0.02,   # Delta C1
         0.02,   # Delta C2
         0.02,   # Delta C4
     ])
 
     # ========================================================
-    # Faster debug horizon
+    # Horizon
     #
-    # dt = 0.02 s
+    # $$
+    # T_H = N \Delta t
+    # $$
     #
-    # N = 15 -> 0.30 s horizon
+    # With dt = 0.02 s and N = 15:
     #
-    # Once behavior is correct, try N=25 or N=50.
+    # $$
+    # T_H = 0.30 \text{ s}
+    # $$
     # ========================================================
 
     N = 15
@@ -1196,53 +1574,78 @@ if __name__ == "__main__":
         casadi_model=model,
     )
 
-    # IPOPT still works here, but the model is now affine and
-    # the cost is quadratic. This should be much faster than
-    # the previous nonlinear-projection formulation.
     opt_control.init_optimization()
 
     # ========================================================
-    # Initial physical state
+    # Hybrid plant
+    #
+    # Koopman:
+    #   attitude/rates
+    #
+    # Plane:
+    #   translation
     # ========================================================
+
+    AIRSPEED_CMD = 25.0
+
+    plant = KoopmanPlanePlant(
+        koopman_model=model,
+        dt=model.dt_val,
+        initial_speed=AIRSPEED_CMD,
+        airspeed_tau=0.5,
+    )
+
+    # ========================================================
+    # Initial aircraft condition
+    # ========================================================
+
+    phi0 = np.deg2rad(
+        10.0
+    )
+
+    theta0 = np.deg2rad(
+        2.0
+    )
 
     psi0 = np.deg2rad(
-        0.0
+        45.0
     )
 
-    x_current = np.array([
-        np.deg2rad(10.0),   # phi
-        np.deg2rad(2.0),    # theta
-        np.sin(psi0),       # sin psi
-        np.cos(psi0),       # cos psi
-        0.0,                # p
-        0.0,                # q
-        0.0,                # r
-    ], dtype=float)
-
-    # Model-in-the-loop test:
-    # lift once and preserve latent state.
-    z_current = (
-        model.lift_state(
-            x_current
-        )
+    plant.initialize(
+        position=np.array([
+            0.0,
+            0.0,
+            0.0,
+        ]),
+        phi=phi0,
+        theta=theta0,
+        psi=psi0,
+        p=0.0,
+        q=0.0,
+        r=0.0,
+        airspeed=AIRSPEED_CMD,
     )
 
     # ========================================================
-    # Target
+    # Attitude target for Koopman MPC
+    #
+    # This controller currently regulates attitude/rates.
+    # Position is propagated by the hybrid plane but is NOT
+    # yet included in the MPC objective.
     # ========================================================
 
     psi_ref = np.deg2rad(
-        90.0
+        180.0
     )
 
     x_target = np.array([
-        0.0,                  # phi
-        0.0,                  # theta
-        np.sin(psi_ref),      # sin psi
-        np.cos(psi_ref),      # cos psi
-        0.0,                  # p
-        0.0,                  # q
-        0.0,                  # r
+        0.0,                 # phi
+        0.0,                 # theta
+        np.sin(psi_ref),     # sin psi
+        np.cos(psi_ref),     # cos psi
+        0.0,                 # p
+        0.0,                 # q
+        0.0,                 # r
     ], dtype=float)
 
     # ========================================================
@@ -1253,7 +1656,7 @@ if __name__ == "__main__":
         koopman.U_mean.copy()
     )
 
-    # Start desired-heading channels at the target heading.
+    # Start desired-heading channels consistently.
     u_current[2] = np.sin(
         psi_ref
     )
@@ -1344,26 +1747,38 @@ if __name__ == "__main__":
         )
 
     # ========================================================
-    # Closed-loop logging
+    # Logging
     # ========================================================
 
-    state_history = [
-        x_current.copy()
+    initial_full_state = (
+        plant.get_full_state()
+    )
+
+    plant_history = [
+        initial_full_state.copy()
+    ]
+
+    attitude_history = [
+        plant.physical_attitude_state.copy()
     ]
 
     koopman_state_history = [
-        z_current.copy()
+        plant.z_koopman.copy()
     ]
 
     control_history = []
 
     prediction_history = []
 
+    solve_time_history = []
+
     # ========================================================
-    # Closed-loop model-in-the-loop simulation
+    # Closed-loop hybrid simulation
     # ========================================================
 
-    MAX_STEPS = 150
+    MAX_STEPS = 250
+
+    import time
 
     for step in range(
         MAX_STEPS
@@ -1374,6 +1789,26 @@ if __name__ == "__main__":
             f"================ STEP {step} ================"
         )
 
+        # ----------------------------------------------------
+        # Current physical attitude state:
+        #
+        # [phi, theta, sinpsi, cospsi, p, q, r]
+        # ----------------------------------------------------
+
+        x_current = (
+            plant.physical_attitude_state
+            .copy()
+        )
+
+        # ----------------------------------------------------
+        # Current full lifted Koopman state
+        # ----------------------------------------------------
+
+        z_current = (
+            plant.z_koopman
+            .copy()
+        )
+
         if custom_stop_criteria(
             x_current,
             x_target,
@@ -1382,12 +1817,15 @@ if __name__ == "__main__":
             print(
                 "Stop criteria satisfied."
             )
-
             break
 
-        # ----------------------------------------------------
-        # Solve from CURRENT latent Koopman state.
-        # ----------------------------------------------------
+        # ====================================================
+        # Solve MPC
+        # ====================================================
+
+        solve_start = (
+            time.perf_counter()
+        )
 
         solution = (
             opt_control.solve(
@@ -1395,6 +1833,15 @@ if __name__ == "__main__":
                 xF=x_target,
                 u0=u_current,
             )
+        )
+
+        solve_elapsed = (
+            time.perf_counter()
+            - solve_start
+        )
+
+        solve_time_history.append(
+            solve_elapsed
         )
 
         result = (
@@ -1416,7 +1863,11 @@ if __name__ == "__main__":
             X_pred.copy()
         )
 
-        # Apply only first control.
+        # ====================================================
+        # Receding-horizon action:
+        # apply only first optimized input
+        # ====================================================
+
         u_command = (
             U_pred[:, 0]
             .copy()
@@ -1426,73 +1877,83 @@ if __name__ == "__main__":
             u_command.copy()
         )
 
-        print(
-            "Current physical state:",
-            x_current,
-        )
+        # ====================================================
+        # Actuate hybrid plane plant
+        # ====================================================
 
-        print(
-            "First optimized control:",
-            u_command,
+        full_state = (
+            plant.step(
+                koopman_control=u_command,
+                v_cmd=AIRSPEED_CMD,
+            )
         )
 
         # ====================================================
-        # Koopman model used as simulated plant
-        #
-        # Propagate full latent state ONE step.
+        # Log resulting state
         # ====================================================
 
-        z_current = np.asarray(
-            model.function(
-                z_current,
-                u_command,
-            )
-        ).astype(float).reshape(-1)
-
-        # ----------------------------------------------------
-        # Project yaw only AFTER the control is applied.
-        #
-        # This projection is outside the NLP, so it does not
-        # slow down every horizon evaluation.
-        # ----------------------------------------------------
-
-        z_current = (
-            model.project_yaw_numpy(
-                z_current
-            )
+        plant_history.append(
+            full_state.copy()
         )
 
-        x_current = (
-            model.physical_state_numpy(
-                z_current
-            )
-        )
-
-        state_history.append(
-            x_current.copy()
+        attitude_history.append(
+            plant.physical_attitude_state
+            .copy()
         )
 
         koopman_state_history.append(
-            z_current.copy()
+            plant.z_koopman
+            .copy()
         )
 
-        # Previous applied input is the reference for Delta-u.
+        # Delta-u reference for next solve.
         u_current = (
             u_command.copy()
+        )
+
+        print(
+            "Solve time [s]:",
+            solve_elapsed,
+        )
+
+        print(
+            "Position [m]:",
+            plant.position,
+        )
+
+        print(
+            "Attitude [deg]:",
+            np.rad2deg(
+                full_state[3:6]
+            ),
+        )
+
+        print(
+            "Airspeed [m/s]:",
+            full_state[6],
+        )
+
+        print(
+            "Applied Koopman control:",
+            u_command,
         )
 
     else:
 
         print(
-            "Maximum number of MPC iterations reached."
+            "Maximum number of closed-loop iterations reached."
         )
 
     # ========================================================
     # Convert logs
     # ========================================================
 
-    state_history = np.asarray(
-        state_history
+    plant_history = np.asarray(
+        plant_history
+    )
+
+    attitude_history = np.asarray(
+        attitude_history
     )
 
     koopman_state_history = np.asarray(
@@ -1503,24 +1964,55 @@ if __name__ == "__main__":
         control_history
     )
 
+    solve_time_history = np.asarray(
+        solve_time_history
+    )
+
+    # Full-state column definitions
+    X_POS = 0
+    Y_POS = 1
+    Z_POS = 2
+    PHI = 3
+    THETA = 4
+    PSI = 5
+    SPEED = 6
+    P_RATE = 7
+    Q_RATE = 8
+    R_RATE = 9
+
     print()
+    print("======================================")
+    print("HYBRID SIMULATION COMPLETE")
+    print("======================================")
     print(
         "Closed-loop iterations:",
         len(control_history),
     )
 
     print(
-        "Final physical state:",
-        state_history[-1],
+        "Final full plant state:",
+        plant_history[-1],
     )
 
+    if solve_time_history.size > 0:
+
+        print(
+            "Mean MPC solve time [s]:",
+            solve_time_history.mean(),
+        )
+
+        print(
+            "Max MPC solve time [s]:",
+            solve_time_history.max(),
+        )
+
     # ========================================================
-    # Tracking plots
+    # Time vectors
     # ========================================================
 
     t_state = (
         np.arange(
-            state_history.shape[0]
+            plant_history.shape[0]
         )
         * model.dt_val
     )
@@ -1530,28 +2022,6 @@ if __name__ == "__main__":
             control_history.shape[0]
         )
         * model.dt_val
-    )
-
-    psi_history = np.unwrap(
-        np.arctan2(
-            state_history[:, 2],
-            state_history[:, 3],
-        )
-    )
-
-    psi_target_plot = np.arctan2(
-        x_target[2],
-        x_target[3],
-    )
-
-    psi_target_unwrapped = (
-        psi_history[0]
-        + (
-            psi_target_plot
-            - psi_history[0]
-            + np.pi
-        ) % (2.0 * np.pi)
-        - np.pi
     )
 
     # ========================================================
@@ -1565,96 +2035,65 @@ if __name__ == "__main__":
         sharex=True,
     )
 
-    axes1[0].plot(
-        t_state,
+    attitude_labels = [
+        r"$\phi$ [deg]",
+        r"$\theta$ [deg]",
+        r"$\psi$ [deg]",
+    ]
+
+    refs = [
+        0.0,
+        0.0,
         np.rad2deg(
-            state_history[:, 0]
+            psi_ref
         ),
-        label="MPC",
-        linewidth=1.8,
-    )
+    ]
 
-    axes1[0].axhline(
-        np.rad2deg(
-            x_target[0]
-        ),
-        linestyle="--",
-        label="Reference",
-    )
+    state_indices = [
+        PHI,
+        THETA,
+        PSI,
+    ]
 
-    axes1[0].set_ylabel(
-        r"$\phi$ [deg]"
-    )
+    for ax, idx, label, ref in zip(
+        axes1,
+        state_indices,
+        attitude_labels,
+        refs,
+    ):
 
-    axes1[0].grid(
-        True,
-        alpha=0.3,
-    )
+        ax.plot(
+            t_state,
+            np.rad2deg(
+                plant_history[:, idx]
+            ),
+            label="Hybrid plant",
+            linewidth=1.8,
+        )
 
-    axes1[0].legend()
+        ax.axhline(
+            ref,
+            linestyle="--",
+            label="Reference",
+        )
 
-    axes1[1].plot(
-        t_state,
-        np.rad2deg(
-            state_history[:, 1]
-        ),
-        label="MPC",
-        linewidth=1.8,
-    )
+        ax.set_ylabel(
+            label
+        )
 
-    axes1[1].axhline(
-        np.rad2deg(
-            x_target[1]
-        ),
-        linestyle="--",
-        label="Reference",
-    )
+        ax.grid(
+            True,
+            alpha=0.3,
+        )
 
-    axes1[1].set_ylabel(
-        r"$\theta$ [deg]"
-    )
+        ax.legend()
 
-    axes1[1].grid(
-        True,
-        alpha=0.3,
-    )
-
-    axes1[1].legend()
-
-    axes1[2].plot(
-        t_state,
-        np.rad2deg(
-            psi_history
-        ),
-        label="MPC",
-        linewidth=1.8,
-    )
-
-    axes1[2].axhline(
-        np.rad2deg(
-            psi_target_unwrapped
-        ),
-        linestyle="--",
-        label="Reference",
-    )
-
-    axes1[2].set_ylabel(
-        r"$\psi$ [deg]"
-    )
-
-    axes1[2].set_xlabel(
+    axes1[-1].set_xlabel(
         "Time [s]"
     )
 
-    axes1[2].grid(
-        True,
-        alpha=0.3,
-    )
-
-    axes1[2].legend()
-
     fig1.suptitle(
-        "Koopman MPC Attitude Tracking"
+        "Koopman MPC + Plane Attitude Tracking"
     )
 
     fig1.tight_layout()
@@ -1670,37 +2109,35 @@ if __name__ == "__main__":
         sharex=True,
     )
 
-    rate_names = [
+    rate_indices = [
+        P_RATE,
+        Q_RATE,
+        R_RATE,
+    ]
+
+    rate_labels = [
         r"$p$ [deg/s]",
         r"$q$ [deg/s]",
         r"$r$ [deg/s]",
     ]
 
-    rate_indices = [
-        4,
-        5,
-        6,
-    ]
-
     for ax, idx, label in zip(
         axes2,
         rate_indices,
-        rate_names,
+        rate_labels,
     ):
 
         ax.plot(
             t_state,
             np.rad2deg(
-                state_history[:, idx]
+                plant_history[:, idx]
             ),
-            label="MPC",
+            label="Hybrid plant",
             linewidth=1.8,
         )
 
         ax.axhline(
-            np.rad2deg(
-                x_target[idx]
-            ),
+            0.0,
             linestyle="--",
             label="Reference",
         )
@@ -1727,24 +2164,8 @@ if __name__ == "__main__":
     fig2.tight_layout()
 
     # ========================================================
-    # FIGURE 3 — Tracking error
+    # FIGURE 3 — Position vs time
     # ========================================================
-
-    phi_error = (
-        state_history[:, 0]
-        - x_target[0]
-    )
-
-    theta_error = (
-        state_history[:, 1]
-        - x_target[1]
-    )
-
-    psi_error = (
-        psi_history
-        - psi_target_unwrapped
-        + np.pi
-    ) % (2.0 * np.pi) - np.pi
 
     fig3, axes3 = plt.subplots(
         3,
@@ -1753,84 +2174,144 @@ if __name__ == "__main__":
         sharex=True,
     )
 
-    axes3[0].plot(
-        t_state,
-        np.rad2deg(
-            phi_error
-        ),
-        linewidth=1.8,
-    )
+    position_labels = [
+        "x [m]",
+        "y [m]",
+        "z [m]",
+    ]
 
-    axes3[0].axhline(
-        0.0,
-        linestyle="--",
-    )
+    position_indices = [
+        X_POS,
+        Y_POS,
+        Z_POS,
+    ]
 
-    axes3[0].set_ylabel(
-        r"$e_\phi$ [deg]"
-    )
+    for ax, idx, label in zip(
+        axes3,
+        position_indices,
+        position_labels,
+    ):
 
-    axes3[0].grid(
-        True,
-        alpha=0.3,
-    )
+        ax.plot(
+            t_state,
+            plant_history[:, idx],
+            linewidth=1.8,
+        )
 
-    axes3[1].plot(
-        t_state,
-        np.rad2deg(
-            theta_error
-        ),
-        linewidth=1.8,
-    )
+        ax.set_ylabel(
+            label
+        )
 
-    axes3[1].axhline(
-        0.0,
-        linestyle="--",
-    )
+        ax.grid(
+            True,
+            alpha=0.3,
+        )
 
-    axes3[1].set_ylabel(
-        r"$e_\theta$ [deg]"
-    )
-
-    axes3[1].grid(
-        True,
-        alpha=0.3,
-    )
-
-    axes3[2].plot(
-        t_state,
-        np.rad2deg(
-            psi_error
-        ),
-        linewidth=1.8,
-    )
-
-    axes3[2].axhline(
-        0.0,
-        linestyle="--",
-    )
-
-    axes3[2].set_ylabel(
-        r"$e_\psi$ [deg]"
-    )
-
-    axes3[2].set_xlabel(
+    axes3[-1].set_xlabel(
         "Time [s]"
     )
 
-    axes3[2].grid(
-        True,
-        alpha=0.3,
-    )
-
     fig3.suptitle(
-        "Koopman MPC Attitude Tracking Error"
+        "Hybrid Plane Position"
     )
 
     fig3.tight_layout()
 
     # ========================================================
-    # FIGURE 4 — Control commands
+    # FIGURE 4 — XY ground track
+    # ========================================================
+
+    fig4, ax4 = plt.subplots(
+        figsize=(9, 8)
+    )
+
+    ax4.plot(
+        plant_history[:, X_POS],
+        plant_history[:, Y_POS],
+        linewidth=2.0,
+    )
+
+    ax4.scatter(
+        plant_history[0, X_POS],
+        plant_history[0, Y_POS],
+        label="Start",
+    )
+
+    ax4.scatter(
+        plant_history[-1, X_POS],
+        plant_history[-1, Y_POS],
+        label="End",
+    )
+
+    ax4.set_xlabel(
+        "x [m]"
+    )
+
+    ax4.set_ylabel(
+        "y [m]"
+    )
+
+    ax4.set_title(
+        "Hybrid Plane Ground Track"
+    )
+
+    ax4.axis(
+        "equal"
+    )
+
+    ax4.grid(
+        True,
+        alpha=0.3,
+    )
+
+    ax4.legend()
+
+    fig4.tight_layout()
+
+    # ========================================================
+    # FIGURE 5 — Airspeed
+    # ========================================================
+
+    fig5, ax5 = plt.subplots(
+        figsize=(11, 5)
+    )
+
+    ax5.plot(
+        t_state,
+        plant_history[:, SPEED],
+        linewidth=1.8,
+        label="Airspeed",
+    )
+
+    ax5.axhline(
+        AIRSPEED_CMD,
+        linestyle="--",
+        label="Command",
+    )
+
+    ax5.set_xlabel(
+        "Time [s]"
+    )
+
+    ax5.set_ylabel(
+        "Airspeed [m/s]"
+    )
+
+    ax5.set_title(
+        "Hybrid Plane Airspeed"
+    )
+
+    ax5.grid(
+        True,
+        alpha=0.3,
+    )
+
+    ax5.legend()
+
+    fig5.tight_layout()
+
+    # ========================================================
+    # FIGURE 6 — Koopman MPC controls
     # ========================================================
 
     if control_history.shape[0] > 0:
@@ -1846,14 +2327,14 @@ if __name__ == "__main__":
             "C4",
         ]
 
-        fig4, axes4 = plt.subplots(
+        fig6, axes6 = plt.subplots(
             4,
             2,
             figsize=(13, 11),
             sharex=True,
         )
 
-        axes4 = axes4.flatten()
+        axes6 = axes6.flatten()
 
         for i in range(
             model.n_controls
@@ -1861,7 +2342,7 @@ if __name__ == "__main__":
 
             if i in [0, 1]:
 
-                y = np.rad2deg(
+                values = np.rad2deg(
                     control_history[:, i]
                 )
 
@@ -1872,7 +2353,7 @@ if __name__ == "__main__":
 
             else:
 
-                y = (
+                values = (
                     control_history[:, i]
                 )
 
@@ -1880,353 +2361,155 @@ if __name__ == "__main__":
                     control_names[i]
                 )
 
-            axes4[i].step(
+            axes6[i].step(
                 t_control,
-                y,
+                values,
                 where="post",
                 linewidth=1.5,
             )
 
-            axes4[i].set_ylabel(
+            axes6[i].set_ylabel(
                 ylabel
             )
 
-            axes4[i].grid(
+            axes6[i].grid(
                 True,
                 alpha=0.3,
             )
 
-        axes4[-2].set_xlabel(
+        axes6[-2].set_xlabel(
             "Time [s]"
         )
 
-        axes4[-1].set_xlabel(
+        axes6[-1].set_xlabel(
             "Time [s]"
         )
 
-        fig4.suptitle(
+        fig6.suptitle(
             "Koopman MPC Control Commands"
         )
 
-        fig4.tight_layout()
+        fig6.tight_layout()
 
     # ========================================================
-    # FIGURE 5 — Yaw sin/cos states
+    # FIGURE 7 — Roll prediction horizons
     # ========================================================
 
-    fig5, axes5 = plt.subplots(
-        2,
-        1,
-        figsize=(11, 7),
-        sharex=True,
-    )
+    if len(
+        prediction_history
+    ) > 0:
 
-    axes5[0].plot(
-        t_state,
-        state_history[:, 2],
-        label=r"$\sin(\psi)$",
-        linewidth=1.8,
-    )
-
-    axes5[0].axhline(
-        x_target[2],
-        linestyle="--",
-        label="Reference",
-    )
-
-    axes5[0].set_ylabel(
-        r"$\sin(\psi)$"
-    )
-
-    axes5[0].grid(
-        True,
-        alpha=0.3,
-    )
-
-    axes5[0].legend()
-
-    axes5[1].plot(
-        t_state,
-        state_history[:, 3],
-        label=r"$\cos(\psi)$",
-        linewidth=1.8,
-    )
-
-    axes5[1].axhline(
-        x_target[3],
-        linestyle="--",
-        label="Reference",
-    )
-
-    axes5[1].set_ylabel(
-        r"$\cos(\psi)$"
-    )
-
-    axes5[1].set_xlabel(
-        "Time [s]"
-    )
-
-    axes5[1].grid(
-        True,
-        alpha=0.3,
-    )
-
-    axes5[1].legend()
-
-    fig5.suptitle(
-        "Koopman MPC Yaw-State Tracking"
-    )
-
-    fig5.tight_layout()
-
-    # ========================================================
-    # FIGURE 6 — MPC roll prediction horizons
-    # ========================================================
-
-    fig6, ax6 = plt.subplots(
-        figsize=(11, 6)
-    )
-
-    ax6.plot(
-        t_state,
-        np.rad2deg(
-            state_history[:, 0]
-        ),
-        linewidth=2.0,
-        label="Closed-loop roll",
-    )
-
-    prediction_stride = 10
-
-    for step in range(
-        0,
-        len(prediction_history),
-        prediction_stride,
-    ):
-
-        X_horizon = (
-            prediction_history[step]
+        fig7, ax7 = plt.subplots(
+            figsize=(11, 6)
         )
 
-        horizon_time = (
-            step * model.dt_val
-            + np.arange(
-                X_horizon.shape[1]
-            ) * model.dt_val
-        )
-
-        ax6.plot(
-            horizon_time,
+        ax7.plot(
+            t_state,
             np.rad2deg(
-                X_horizon[0, :]
+                plant_history[:, PHI]
             ),
-            linestyle="--",
-            alpha=0.5,
+            linewidth=2.0,
+            label="Plant roll",
         )
 
-    ax6.axhline(
-        np.rad2deg(
-            x_target[0]
-        ),
-        linestyle="--",
-        label="Roll reference",
-    )
+        prediction_stride = 10
 
-    ax6.set_xlabel(
-        "Time [s]"
-    )
-
-    ax6.set_ylabel(
-        r"$\phi$ [deg]"
-    )
-
-    ax6.set_title(
-        "Koopman MPC Roll Prediction Horizons"
-    )
-
-    ax6.grid(
-        True,
-        alpha=0.3,
-    )
-
-    ax6.legend()
-
-    fig6.tight_layout()
-
-    # ========================================================
-    # FIGURE 7 — One-step prediction consistency
-    #
-    # Because yaw projection is applied only AFTER the plant
-    # step, tiny differences may appear in yaw relative to the
-    # unprojected MPC first-step prediction.
-    # ========================================================
-
-    if len(prediction_history) > 0:
-
-        n_compare = min(
+        for step in range(
+            0,
             len(prediction_history),
-            state_history.shape[0] - 1,
-        )
-
-        pred_roll = []
-        actual_roll = []
-
-        pred_pitch = []
-        actual_pitch = []
-
-        pred_yaw = []
-        actual_yaw = []
-
-        for k in range(
-            n_compare
+            prediction_stride,
         ):
 
-            X_h = (
-                prediction_history[k]
+            X_horizon = (
+                prediction_history[step]
             )
 
-            pred_roll.append(
-                X_h[0, 1]
+            horizon_time = (
+                step * model.dt_val
+                + np.arange(
+                    X_horizon.shape[1]
+                ) * model.dt_val
             )
 
-            pred_pitch.append(
-                X_h[1, 1]
+            ax7.plot(
+                horizon_time,
+                np.rad2deg(
+                    X_horizon[0, :]
+                ),
+                linestyle="--",
+                alpha=0.5,
             )
 
-            pred_yaw.append(
-                np.arctan2(
-                    X_h[2, 1],
-                    X_h[3, 1],
-                )
-            )
-
-            actual_roll.append(
-                state_history[k + 1, 0]
-            )
-
-            actual_pitch.append(
-                state_history[k + 1, 1]
-            )
-
-            actual_yaw.append(
-                np.arctan2(
-                    state_history[k + 1, 2],
-                    state_history[k + 1, 3],
-                )
-            )
-
-        t_compare = (
-            np.arange(
-                n_compare
-            )
-            * model.dt_val
-        )
-
-        fig7, axes7 = plt.subplots(
-            3,
-            1,
-            figsize=(11, 9),
-            sharex=True,
-        )
-
-        axes7[0].plot(
-            t_compare,
-            np.rad2deg(
-                pred_roll
-            ),
-            label="Predicted next",
-        )
-
-        axes7[0].plot(
-            t_compare,
-            np.rad2deg(
-                actual_roll
-            ),
+        ax7.axhline(
+            0.0,
             linestyle="--",
-            label="Actual next",
+            label="Roll reference",
         )
 
-        axes7[0].set_ylabel(
-            r"$\phi$ [deg]"
-        )
-
-        axes7[0].grid(
-            True,
-            alpha=0.3,
-        )
-
-        axes7[0].legend()
-
-        axes7[1].plot(
-            t_compare,
-            np.rad2deg(
-                pred_pitch
-            ),
-            label="Predicted next",
-        )
-
-        axes7[1].plot(
-            t_compare,
-            np.rad2deg(
-                actual_pitch
-            ),
-            linestyle="--",
-            label="Actual next",
-        )
-
-        axes7[1].set_ylabel(
-            r"$\theta$ [deg]"
-        )
-
-        axes7[1].grid(
-            True,
-            alpha=0.3,
-        )
-
-        axes7[1].legend()
-
-        axes7[2].plot(
-            t_compare,
-            np.rad2deg(
-                np.unwrap(
-                    pred_yaw
-                )
-            ),
-            label="Predicted next",
-        )
-
-        axes7[2].plot(
-            t_compare,
-            np.rad2deg(
-                np.unwrap(
-                    actual_yaw
-                )
-            ),
-            linestyle="--",
-            label="Actual next",
-        )
-
-        axes7[2].set_ylabel(
-            r"$\psi$ [deg]"
-        )
-
-        axes7[2].set_xlabel(
+        ax7.set_xlabel(
             "Time [s]"
         )
 
-        axes7[2].grid(
+        ax7.set_ylabel(
+            r"$\phi$ [deg]"
+        )
+
+        ax7.set_title(
+            "Koopman MPC Roll Prediction Horizons"
+        )
+
+        ax7.grid(
             True,
             alpha=0.3,
         )
 
-        axes7[2].legend()
-
-        fig7.suptitle(
-            "One-Step Koopman Prediction Consistency"
-        )
+        ax7.legend()
 
         fig7.tight_layout()
 
+    # ========================================================
+    # FIGURE 8 — MPC solve time
+    # ========================================================
+
+    if solve_time_history.size > 0:
+
+        fig8, ax8 = plt.subplots(
+            figsize=(11, 5)
+        )
+
+        ax8.plot(
+            t_control,
+            solve_time_history,
+            linewidth=1.5,
+        )
+
+        ax8.axhline(
+            model.dt_val,
+            linestyle="--",
+            label=f"dt = {model.dt_val:.3f} s",
+        )
+
+        ax8.set_xlabel(
+            "Simulation time [s]"
+        )
+
+        ax8.set_ylabel(
+            "Solve time [s]"
+        )
+
+        ax8.set_title(
+            "MPC Solve Time"
+        )
+
+        ax8.grid(
+            True,
+            alpha=0.3,
+        )
+
+        ax8.legend()
+
+        fig8.tight_layout()
+        
     # save all figures
     fig1.savefig("figure1.png")
     fig2.savefig("figure2.png")
@@ -2235,5 +2518,6 @@ if __name__ == "__main__":
     fig5.savefig("figure5.png")
     fig6.savefig("figure6.png")
     fig7.savefig("figure7.png")
+    fig8.savefig("figure8.png")
 
     plt.show()
